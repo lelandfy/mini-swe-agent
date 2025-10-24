@@ -44,10 +44,20 @@ class _TextualAgent(DefaultAgent):
         super().__init__(*args, config_class=TextualAgentConfig, **kwargs)
         self._current_action_from_human = False
 
+    def _safe_call_from_thread(self, callback, *args, **kwargs):
+        """Safely call from thread, catching RuntimeError if event loop is closed."""
+        try:
+            # Check if the app's loop is still running
+            if hasattr(self.app, '_loop') and self.app._loop and not self.app._loop.is_closed():
+                self.app.call_from_thread(callback, *args, **kwargs)
+        except RuntimeError:
+            # Event loop is closed, silently ignore
+            pass
+
     def add_message(self, role: str, content: str, **kwargs):
         super().add_message(role, content, **kwargs)
         if self.app.agent_state != "UNINITIALIZED":
-            self.app.call_from_thread(self.app.on_message_added)
+            self._safe_call_from_thread(self.app.on_message_added)
 
     def query(self) -> dict:
         if self.config.mode == "human":
@@ -64,12 +74,12 @@ class _TextualAgent(DefaultAgent):
             exit_status, result = super().run(task, **kwargs)
         except Exception as e:
             result = str(e)
-            self.app.call_from_thread(self.app.action_quit)
+            self._safe_call_from_thread(self.app.action_quit)
             print(traceback.format_exc())
             return "ERROR", result
         else:
-            self.app.call_from_thread(self.app.on_agent_finished, exit_status, result)
-        self.app.call_from_thread(self.app.action_quit)
+            self._safe_call_from_thread(self.app.on_agent_finished, exit_status, result)
+        self._safe_call_from_thread(self.app.action_quit)
         return exit_status, result
 
     def execute_action(self, action: dict) -> dict:
@@ -162,6 +172,16 @@ class SmartInputContainer(Container):
         else:
             self._single_input.focus()
 
+    def _safe_call_from_thread(self, callback, *args, **kwargs):
+        """Safely call from thread, catching RuntimeError if event loop is closed."""
+        try:
+            # Check if the app's loop is still running
+            if hasattr(self._app, '_loop') and self._app._loop and not self._app._loop.is_closed():
+                self._app.call_from_thread(callback, *args, **kwargs)
+        except RuntimeError:
+            # Event loop is closed, silently ignore
+            pass
+
     def request_input(self, prompt: str) -> str:
         """Request input from user. Returns input text (empty string if confirmed without reason)."""
         self._input_event.clear()
@@ -169,7 +189,7 @@ class SmartInputContainer(Container):
         self.pending_prompt = prompt
         self._header_display.update(prompt)
         self._update_mode_display()
-        self._app.call_from_thread(self._app.update_content)
+        self._safe_call_from_thread(self._app.update_content)
         self._input_event.wait()
         return self._input_result or ""
 
@@ -268,13 +288,23 @@ class TextualAgent(App):
         self._i_step = 0
         self.n_steps = 1
         self.input_container = SmartInputContainer(self)
-        self.log_handler = AddLogEmitCallback(lambda record: self.call_from_thread(self.on_log_message_emitted, record))
+        self.log_handler = AddLogEmitCallback(lambda record: self._safe_call_from_thread(self.on_log_message_emitted, record))
         logging.getLogger().addHandler(self.log_handler)
         self._spinner = Spinner("dots")
         self.exit_status: str = "ExitStatusUnset"
         self.result: str = ""
 
         self._vscroll = VerticalScroll()
+
+    def _safe_call_from_thread(self, callback, *args, **kwargs):
+        """Safely call from thread, catching RuntimeError if event loop is closed."""
+        try:
+            # Check if the loop is still running
+            if hasattr(self, '_loop') and self._loop and not self._loop.is_closed():
+                self.call_from_thread(callback, *args, **kwargs)
+        except RuntimeError:
+            # Event loop is closed, silently ignore
+            pass
 
     def run(self, task: str, **kwargs) -> tuple[str, str]:
         threading.Thread(target=lambda: self.agent.run(task, **kwargs), daemon=True).start()

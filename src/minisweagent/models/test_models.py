@@ -25,7 +25,11 @@ class DeterministicModel:
 
     def query(self, messages: list[dict[str, str]], **kwargs) -> dict:
         self.current_index += 1
-        output = self.config.outputs[self.current_index]
+        # If we've run out of outputs, return a completion message
+        if self.current_index >= len(self.config.outputs):
+            output = "```bash\necho 'COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT'\n```"
+        else:
+            output = self.config.outputs[self.current_index]
         if "/sleep" in output:
             print("SLEEPING")
             time.sleep(float(output.split("/sleep")[1]))

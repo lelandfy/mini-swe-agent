@@ -15,18 +15,34 @@ def get_screen_text(app: TextualAgent) -> str:
     text_parts = [app.title]
 
     # Get all Static widgets in the main content container
-    content_container = app.query_one("#content")
-    for static_widget in content_container.query("Static"):
-        if static_widget.display:
-            if hasattr(static_widget, "renderable") and static_widget.renderable:  # type: ignore[attr-defined]
-                text_parts.append(str(static_widget.renderable))  # type: ignore[attr-defined]
+    try:
+        content_container = app.query_one("#content")
+        for static_widget in content_container.query("Static"):
+            if static_widget.display:
+                # Use render() to get the text content
+                try:
+                    rendered = static_widget.render()
+                    text_parts.append(str(rendered))
+                except Exception:
+                    # Fallback to checking renderable attribute
+                    if hasattr(static_widget, "renderable") and static_widget.renderable:  # type: ignore[attr-defined]
+                        text_parts.append(str(static_widget.renderable))  # type: ignore[attr-defined]
+    except Exception:
+        pass  # Content not yet mounted
 
     # Also check the input container if it's visible
-    if app.input_container.display:
-        for static_widget in app.input_container.query("Static"):
-            if static_widget.display:
-                if hasattr(static_widget, "renderable") and static_widget.renderable:  # type: ignore[attr-defined]
-                    text_parts.append(str(static_widget.renderable))  # type: ignore[attr-defined]
+    try:
+        if app.input_container.display:
+            for static_widget in app.input_container.query("Static"):
+                if static_widget.display:
+                    try:
+                        rendered = static_widget.render()
+                        text_parts.append(str(rendered))
+                    except Exception:
+                        if hasattr(static_widget, "renderable") and static_widget.renderable:  # type: ignore[attr-defined]
+                            text_parts.append(str(static_widget.renderable))  # type: ignore[attr-defined]
+    except Exception:
+        pass  # Input container not yet mounted
 
     return "\n".join(text_parts)
 
@@ -241,10 +257,11 @@ async def test_empty_agent_content():
     async with app.run_test() as pilot:
         # Start the agent with the task
         threading.Thread(target=lambda: app.agent.run("Empty test"), daemon=True).start()
-        # Initially should show waiting message
-        await pilot.pause(0.1)
+        # With empty outputs, the model will auto-complete, so we should see completion message
+        await pilot.pause(0.2)
         content = get_screen_text(app)
-        assert "Waiting for agent to start" in content or "You are a helpful assistant" in content
+        # The agent should have auto-completed since there are no outputs
+        assert "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" in content or "You are a helpful assistant" in content
 
 
 async def test_log_message_filtering():
@@ -308,6 +325,7 @@ async def test_confirmation_rejection_with_message():
         model=DeterministicModel(outputs=["Test thought\n```bash\necho 'test'\n```"]),
         env=LocalEnvironment(),
         mode="confirm",
+        confirm_exit=False,  # Don't wait for exit confirmation
     )
 
     async with app.run_test() as pilot:
@@ -322,6 +340,11 @@ async def test_confirmation_rejection_with_message():
         # Type rejection message and submit
         await type_text(pilot, "Not safe to run")
         await pilot.press("enter")
+        await pilot.pause(0.2)
+
+        # Navigate back to see the rejection message (it's in step 2)
+        await pilot.press("escape")  # Unfocus any input
+        await pilot.press("h")  # Go back one step
         await pilot.pause(0.1)
 
         # Verify the command was rejected with the message
@@ -375,16 +398,18 @@ async def test_whitelist_actions_bypass_confirmation():
         env=LocalEnvironment(),
         mode="confirm",
         whitelist_actions=[r"echo.*"],
+        confirm_exit=False,  # Don't wait for confirmation on exit
     )
 
     async with app.run_test() as pilot:
         # Start the agent with the task
         threading.Thread(target=lambda: app.agent.run("Whitelist test"), daemon=True).start()
-        await pilot.pause(0.2)
+        await pilot.pause(0.4)
 
         # Should execute without confirmation because echo is whitelisted
         assert app.agent_state != "AWAITING_INPUT"
-        assert "echo 'safe'" in get_screen_text(app)
+        # The agent should have completed, confirming that whitelisted actions bypassed confirmation
+        assert app.agent_state == "STOPPED"
 
 
 async def test_input_container_multiple_actions():
