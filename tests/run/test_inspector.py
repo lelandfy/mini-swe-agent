@@ -14,11 +14,20 @@ def get_screen_text(app: TrajectoryInspector) -> str:
     text_parts = []
 
     # Get all Static widgets in the main content container
-    content_container = app.query_one("#content")
-    for static_widget in content_container.query("Static"):
-        if static_widget.display:
-            if hasattr(static_widget, "renderable") and static_widget.renderable:  # type: ignore[attr-defined]
-                text_parts.append(str(static_widget.renderable))  # type: ignore[attr-defined]
+    try:
+        content_container = app.query_one("#content")
+        for static_widget in content_container.query("Static"):
+            if static_widget.display:
+                # Use render() to get the text content
+                try:
+                    rendered = static_widget.render()
+                    text_parts.append(str(rendered))
+                except Exception:
+                    # Fallback to checking renderable attribute
+                    if hasattr(static_widget, "renderable") and static_widget.renderable:  # type: ignore[attr-defined]
+                        text_parts.append(str(static_widget.renderable))  # type: ignore[attr-defined]
+    except Exception:
+        pass  # Content not yet mounted
 
     return "\n".join(text_parts)
 
